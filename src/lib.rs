@@ -49,9 +49,8 @@
 use std::boxed::Box;
 use std::result::Result;
 
-use num_traits::{Float, FloatConst};
+use num_traits::{Float, FloatConst, FromPrimitive, ToPrimitive};
 use rand::{
-    distributions::{uniform::SampleUniform, Uniform},
     rngs::ThreadRng,
     seq::{IteratorRandom, SliceRandom},
     Rng,
@@ -114,7 +113,7 @@ pub struct Forest<T, const N: usize> {
 
 impl<'de, T, const N: usize> Forest<T, N>
 where
-    T: ForestFloat<'de> + SampleUniform + Default,
+    T: ForestFloat<'de> + Default + FromPrimitive + ToPrimitive,
     StandardNormal: Distribution<T>,
 {
     /// Build a new forest from the given training data
@@ -164,7 +163,11 @@ where
 
     /// Compute anomaly score for an item, with explicit recursion cap
     pub fn score_with_recursion_cap(&self, values: &[T; N], max_depth: usize) -> f64 {
-        let path_length: f64 = self.trees.iter().map(|tree| tree.path_length_with_cap(values, max_depth)).sum();
+        let path_length: f64 = self
+            .trees
+            .iter()
+            .map(|tree| tree.path_length_with_cap(values, max_depth))
+            .sum();
         let eh = path_length / self.trees.len() as f64;
         2.0_f64.powf(-eh / self.avg_path_length_c)
     }
@@ -207,7 +210,7 @@ struct Tree<T, const N: usize> {
 
 impl<'de, T, const N: usize> Tree<T, N>
 where
-    T: ForestFloat<'de> + SampleUniform + Default,
+    T: ForestFloat<'de> + Default + FromPrimitive + ToPrimitive,
     StandardNormal: Distribution<T>,
 {
     pub fn new(
@@ -269,7 +272,7 @@ fn make_node<'de, T, const N: usize>(
     extension_level: usize,
 ) -> Node<T, N>
 where
-    T: ForestFloat<'de> + SampleUniform + Default,
+    T: ForestFloat<'de> + Default + FromPrimitive + ToPrimitive,
     StandardNormal: Distribution<T>,
 {
     let num_samples = samples.len();
@@ -298,7 +301,13 @@ where
                         // sampling with lower and upper bound being equal panics
                         *min_val
                     } else {
-                        rng.sample(Uniform::new(*min_val, *max_val))
+                        // Avoid constructing a new Uniform distribution for each sample.
+                        // Sample u ~ U[0,1) in f64 space and scale to [min, max), then cast back to T.
+                        let u01: f64 = rng.gen::<f64>();
+                        let min_f = min_val.to_f64().unwrap();
+                        let range_f = (*max_val - *min_val).to_f64().unwrap();
+                        let val_f = min_f + range_f * u01;
+                        T::from_f64(val_f).unwrap()
                     }
                 });
             p

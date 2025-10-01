@@ -21,11 +21,20 @@ Improved performance for high-dimensional data by only generating non-zero value
 - Now only generates `extension_level + 1` random values for the active dimensions
 - Significantly reduces computational cost for high-dimensional datasets
 
+## 3. Eliminated Uniform Sampling Hotspot
+
+Reworked intercept-point sampling to remove per-element `Uniform::new(min, max)` construction:
+
+- Replaced `Uniform::new(min, max)` with unit-range sampling (`rng.gen::<f64>()`) scaled to `[min, max)` and converted back to `T`
+- Dropped the `SampleUniform` bound/import; added `FromPrimitive`/`ToPrimitive` bounds to enable numeric conversion
+- Removes the profiler hotspot in `UniformFloat<f64>::new`, reducing CPU time during tree construction
+
 ## Key Benefits
 
 1. **Stability**: The recursion cap prevents stack overflow errors
 2. **Performance**: Sparse vector generation is much faster for high-dimensional data
-3. **Compatibility**: All existing tests continue to pass
+3. **Performance**: Intercept sampling no longer constructs `Uniform` per element; CPU hotspot removed
+4. **Compatibility**: All existing tests continue to pass
 
 ## Usage Example
 
