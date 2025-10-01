@@ -171,6 +171,53 @@ where
         let eh = path_length / self.trees.len() as f64;
         2.0_f64.powf(-eh / self.avg_path_length_c)
     }
+
+    /// Build a new forest with cooperative cancellation support. The `should_cancel`
+    /// callback will be polled before constructing each tree and, if it returns true,
+    /// the function returns `Error::Cancelled` immediately.
+    pub fn from_slice_with_cancel<F>(
+        training_data: &[[T; N]],
+        options: &ForestOptions,
+        mut should_cancel: F,
+    ) -> Result<Self, Error>
+    where
+        F: FnMut() -> bool,
+    {
+        if training_data.len() < options.sample_size || N == 0 {
+            return Err(Error::InsufficientTrainingData);
+        } else if options.extension_level > (N - 1) {
+            return Err(Error::ExtensionLevelExceedsDimensions);
+        }
+
+        let max_tree_depth = if let Some(mdt) = options.max_tree_depth {
+            mdt
+        } else {
+            (options.sample_size as f64).log2().ceil() as usize
+        };
+
+        let rng = &mut rand::thread_rng();
+        let mut trees: Vec<Tree<T, N>> = Vec::with_capacity(options.n_trees);
+        for _ in 0..options.n_trees {
+            if should_cancel() {
+                return Err(Error::Cancelled);
+            }
+            let tree_sample: Vec<_> = training_data
+                .choose_multiple(rng, options.sample_size)
+                .collect();
+            let tree = Tree::new(
+                tree_sample.as_slice(),
+                rng,
+                max_tree_depth,
+                options.extension_level,
+            );
+            trees.push(tree);
+        }
+
+        Ok(Self {
+            avg_path_length_c: c_factor(options.sample_size),
+            trees: trees.into_boxed_slice(),
+        })
+    }
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]

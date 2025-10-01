@@ -5,6 +5,7 @@ use std::fmt::Formatter;
 pub enum Error {
     ExtensionLevelExceedsDimensions,
     InsufficientTrainingData,
+    Cancelled,
 }
 
 impl fmt::Display for Error {
@@ -15,6 +16,7 @@ impl fmt::Display for Error {
                 "Extension level has to be less than the number of dimensions"
             ),
             Self::InsufficientTrainingData => write!(f, "insufficient training data"),
+            Self::Cancelled => write!(f, "training cancelled"),
         }
     }
 }
