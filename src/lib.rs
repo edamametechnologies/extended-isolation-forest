@@ -228,6 +228,10 @@ enum Node<T, const N: usize> {
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 struct InNode<T, const N: usize> {
+    /// Size of the dataset present at the node, so a path that stops here
+    /// (the scoring recursion cap) is estimated like an unresolved leaf.
+    num_samples: usize,
+
     /// Left child node.
     left: Box<Node<T, N>>,
 
@@ -286,8 +290,19 @@ where
     T: Float,
 {
     if depth >= max_depth {
-        // Cap reached: treat as external node with 1 sample (shortest possible path)
-        return 0.0;
+        // Cap reached: the path is unresolved here, like an external node that
+        // still holds `num_samples` points. Returning 0 (an isolated point)
+        // would make the deepest, most normal paths read as the most
+        // anomalous ones.
+        let num_samples = match node {
+            Node::Ex(ex_node) => ex_node.num_samples,
+            Node::In(in_node) => in_node.num_samples,
+        };
+        return if num_samples <= 1 {
+            0.0
+        } else {
+            c_factor(num_samples)
+        };
     }
     match node {
         Node::Ex(ex_node) => {
@@ -384,6 +399,7 @@ where
         }
 
         Node::In(InNode {
+            num_samples,
             left: Box::new(make_node(
                 samples_left.as_slice(),
                 rng,
@@ -490,5 +506,40 @@ mod tests {
         let forest_json = serde_json::to_string(&forest).unwrap();
         let forest2 = serde_json::from_str(forest_json.as_str()).unwrap();
         assert_anomalies_forest_3d_f64(&forest2);
+    }
+}
+
+#[cfg(test)]
+mod recursion_cap_tests {
+    use super::*;
+
+    /// A scoring cap below the tree depth must not turn the deepest, most
+    /// normal paths into the most anomalous scores: the capped path is
+    /// estimated like an unresolved leaf holding the node's points.
+    #[test]
+    fn a_capped_path_reads_as_unresolved_not_isolated() {
+        let values: Vec<[f64; 2]> = (0..512)
+            .map(|i| {
+                let t = i as f64 / 512.0;
+                [t, 1.0 - t]
+            })
+            .collect();
+        let options = ForestOptions {
+            n_trees: 50,
+            sample_size: 256,
+            max_tree_depth: Some(12),
+            extension_level: 1,
+        };
+        let forest = Forest::from_slice(&values, &options).unwrap();
+        let dense = [0.5, 0.5];
+        let full = forest.score_with_recursion_cap(&dense, 64);
+        let capped = forest.score_with_recursion_cap(&dense, 2);
+        // A cap at depth 2 leaves most of the sample at the node: the estimate
+        // is the long unresolved path, so the score stays far from isolation.
+        assert!(capped < 0.75, "capped score {capped} reads as isolated");
+        assert!(capped <= full + 0.25, "capped {capped} vs full {full}");
+        // A cap no tighter than the depth changes nothing.
+        let same = forest.score_with_recursion_cap(&dense, 12);
+        assert!((same - full).abs() < 1e-12);
     }
 }
