@@ -52,6 +52,7 @@ fn main() -> Result<()> {
             sample_size: 600,
             max_tree_depth: None,
             extension_level: 1,
+            seed: None,
         },
     )?;
 

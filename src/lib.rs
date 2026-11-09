@@ -28,6 +28,7 @@
 //!         sample_size: 200,
 //!         max_tree_depth: None,
 //!         extension_level: 1,
+//!         seed: None,
 //!     };
 //!     Forest::from_slice(values.as_slice(), &options).unwrap()
 //! }
@@ -51,9 +52,9 @@ use std::result::Result;
 
 use num_traits::{Float, FloatConst, FromPrimitive, ToPrimitive};
 use rand::{
-    rngs::ThreadRng,
+    rngs::StdRng,
     seq::{IteratorRandom, SliceRandom},
-    Rng,
+    Rng, SeedableRng,
 };
 use rand_distr::{Distribution, StandardNormal};
 #[cfg(feature = "serde")]
@@ -90,6 +91,20 @@ pub struct ForestOptions {
     /// `extension_level` specifies degree of freedom in choosing the hyperplanes for dividing up
     /// data. Must be smaller than the dimension n of the dataset.
     pub extension_level: usize,
+    /// `seed` fixes the random source the trees are grown from (the sample each
+    /// tree takes and the hyperplanes it draws), so two forests built from the
+    /// same data and options are identical. `None` draws a fresh seed from the
+    /// operating system, as before.
+    pub seed: Option<u64>,
+}
+
+impl ForestOptions {
+    fn rng(&self) -> StdRng {
+        match self.seed {
+            Some(seed) => StdRng::seed_from_u64(seed),
+            None => StdRng::from_entropy(),
+        }
+    }
 }
 
 impl Default for ForestOptions {
@@ -99,6 +114,7 @@ impl Default for ForestOptions {
             sample_size: 20,
             max_tree_depth: None,
             extension_level: 0,
+            seed: None,
         }
     }
 }
@@ -131,7 +147,7 @@ where
         };
 
         // build the trees
-        let rng = &mut rand::thread_rng();
+        let rng = &mut options.rng();
         let trees = (0..options.n_trees)
             .map(|_| {
                 let tree_sample: Vec<_> = training_data
@@ -195,7 +211,7 @@ where
             (options.sample_size as f64).log2().ceil() as usize
         };
 
-        let rng = &mut rand::thread_rng();
+        let rng = &mut options.rng();
         let mut trees: Vec<Tree<T, N>> = Vec::with_capacity(options.n_trees);
         for _ in 0..options.n_trees {
             if should_cancel() {
@@ -266,7 +282,7 @@ where
 {
     pub fn new(
         samples: &[&[T; N]],
-        rng: &mut ThreadRng,
+        rng: &mut StdRng,
         max_tree_depth: usize,
         extension_level: usize,
     ) -> Self {
@@ -328,7 +344,7 @@ where
 
 fn make_node<'de, T, const N: usize>(
     samples: &[&[T; N]],
-    rng: &mut ThreadRng,
+    rng: &mut StdRng,
     current_tree_depth: usize,
     max_tree_depth: usize,
     extension_level: usize,
@@ -478,8 +494,46 @@ mod tests {
             sample_size: 200,
             max_tree_depth: None,
             extension_level: 1,
+            seed: None,
         };
         Forest::from_slice(values.as_slice(), &options).unwrap()
+    }
+
+    /// The same seed grows the same forest: every sample scores identically
+    /// across two builds, and a cancellable build matches a plain one.
+    #[test]
+    fn a_seed_makes_the_forest_reproducible() {
+        let values: Vec<[f64; 2]> = (0..400)
+            .map(|i| {
+                let t = i as f64 / 400.0;
+                [t.sin() * 3.0, (t * 7.0).cos()]
+            })
+            .collect();
+        let options = ForestOptions {
+            n_trees: 40,
+            sample_size: 64,
+            max_tree_depth: None,
+            extension_level: 1,
+            seed: Some(0x5eed),
+        };
+        let a = Forest::from_slice(&values, &options).unwrap();
+        let b = Forest::from_slice(&values, &options).unwrap();
+        let c = Forest::from_slice_with_cancel(&values, &options, || false).unwrap();
+        for probe in [[0.0, 0.0], [2.5, -0.9], [9.0, 9.0], [-3.0, 1.0]] {
+            assert_eq!(a.score(&probe), b.score(&probe));
+            assert_eq!(a.score(&probe), c.score(&probe));
+        }
+        let other = ForestOptions {
+            seed: Some(0x5eee),
+            ..options.clone()
+        };
+        let d = Forest::from_slice(&values, &other).unwrap();
+        assert!(
+            [[0.0, 0.0], [2.5, -0.9], [9.0, 9.0], [-3.0, 1.0]]
+                .iter()
+                .any(|probe| a.score(probe) != d.score(probe)),
+            "another seed grew the same forest"
+        );
     }
 
     fn assert_anomalies_forest_3d_f64(forest: &Forest<f64, 3>) {
@@ -529,6 +583,7 @@ mod recursion_cap_tests {
             sample_size: 256,
             max_tree_depth: Some(12),
             extension_level: 1,
+            seed: None,
         };
         let forest = Forest::from_slice(&values, &options).unwrap();
         let dense = [0.5, 0.5];

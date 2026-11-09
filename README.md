@@ -30,6 +30,7 @@ fn make_f64_forest() -> Forest<f64, 3> {
         sample_size: 200,
         max_tree_depth: None,
         extension_level: 1,
+        seed: None,
     };
     Forest::from_slice(values.as_slice(), &options).unwrap()
 }
